@@ -236,18 +236,12 @@
     color: var(--soft);
     border: 1px solid var(--line) !important;
   }
-  .btn-print {
-    flex: 1.5;
-    background: var(--field);
-    color: var(--ink);
-    border: 1px solid var(--line) !important;
-  }
   .btn-bt {
-    flex: 1.9;
+    flex: 2.4;
     background: var(--accent);
     color: var(--accent-ink);
   }
-  .btn-print:active, .btn-clear:active, .btn-bt:active { opacity: 0.8; }
+  .btn-clear:active, .btn-bt:active { opacity: 0.8; }
   #clip {
     position: fixed;
     left: -9999px;
@@ -271,30 +265,6 @@
     text-align: center;
   }
 
-  /* ---------- print ---------- */
-  #receipt { display: none; }
-  @media print {
-    body { display: block; overflow: visible; }
-    body * { visibility: hidden; }
-    #receipt, #receipt * { visibility: visible; }
-    #receipt {
-      display: block;
-      position: absolute;
-      top: 0; left: 0;
-      width: 100%;
-      font-family: var(--mono);
-      color: #000;
-      background: #fff;
-      padding: 2mm;
-    }
-    body.p58 #receipt { width: 58mm; }
-    body.p80 #receipt { width: 80mm; }
-    #receipt { text-align: center; }
-    #receipt .h { font-weight: 700; font-size: 13px; letter-spacing: 0.1em; margin-bottom: 7px; }
-    #receipt .it { font-size: 16px; font-weight: 600; padding: 3px 0; }
-    #receipt .rule { border-top: 1px dashed #000; margin: 7px auto; }
-    #receipt .tot { font-weight: 700; font-size: 26px; margin-top: 5px; }
-  }
 </style>
 </head>
 <body>
@@ -322,13 +292,11 @@
   </div>
   <div class="actions">
     <button class="btn-clear" id="clear">Clear</button>
-    <button class="btn-print" id="print">Print</button>
     <button class="btn-bt" id="bt">Bluetooth</button>
     <textarea id="clip" readonly aria-hidden="true"></textarea>
   </div>
 </div>
 
-<div id="receipt"></div>
 
 <script>
 (function () {
@@ -409,30 +377,26 @@
     recalc();
   });
 
-  // ---- print ----
-  function buildReceipt() {
-    var body = '', sub = 0;
+  // ---- printing ----
+  // Characters per line: 32 on 58mm paper, 48 on 80mm.
+  function cols() {
+    return document.querySelector('input[name="paper"]:checked').value === '80' ? 48 : 32;
+  }
+
+  function slipRows() {
+    var out = [], sub = 0;
     Array.prototype.forEach.call(rowsEl.children, function (row) {
       var qty  = parseFloat(row.querySelector('.qty').value)  || 0;
       var rate = parseFloat(row.querySelector('.rate').value) || 0;
       if (!qty && !rate) return;
-      var amt = qty * rate;
-      sub += amt;
-      body += '<div class="it">' + qty + ' &times; ' + fmt(rate) + '</div>';
+      sub += qty * rate;
+      out.push(qty + ' x ' + fmt(rate));
     });
-
-    var pct = pctOn.checked ? sub * 0.05 : 0;
-    var html = '<div class="h">ESTIMATE</div>';
-    html += body;
-    if (pct) html += '<div class="it">+ 5% = ' + fmt(pct) + '</div>';
-    html += '<div class="rule"></div>';
-    html += '<div class="tot">' + fmt(sub + pct) + '</div>';
-    document.getElementById('receipt').innerHTML = html;
+    return { lines: out, sub: sub, pct: pctOn.checked ? sub * 0.05 : 0 };
   }
 
-  // ---- direct-to-printer via RawBT (Android, Bluetooth) ----
-  // Builds plain ESC/POS text and hands it to RawBT with a rawbt:base64 link,
-  // bypassing Chrome's print dialog entirely.
+  // ESC/POS for RawBT: the printer does the centring, so sizes are
+  // character cells rather than pixels.
   function escposSlip() {
     var ESC = '\x1B', GS = '\x1D';
     var NORMAL = GS + '!' + '\x00';
@@ -440,53 +404,30 @@
     var BIG    = GS + '!' + '\x11';   // double height + width
     var BOLD_ON = ESC + 'E' + '\x01', BOLD_OFF = ESC + 'E' + '\x00';
 
-    var s = ESC + '@';                // reset
-    s += ESC + 'a' + '\x01';          // centre everything
-
+    var d = slipRows();
+    var s = ESC + '@' + ESC + 'a' + '\x01';
     s += BOLD_ON + 'ESTIMATE' + BOLD_OFF + '\n\n';
-
-    var sub = 0;
-    Array.prototype.forEach.call(rowsEl.children, function (row) {
-      var qty  = parseFloat(row.querySelector('.qty').value)  || 0;
-      var rate = parseFloat(row.querySelector('.rate').value) || 0;
-      if (!qty && !rate) return;
-      sub += qty * rate;
-      s += TALL + qty + ' x ' + fmt(rate) + NORMAL + '\n';
-    });
-
-    var pct = pctOn.checked ? sub * 0.05 : 0;
-    if (pct) s += TALL + '+ 5% = ' + fmt(pct) + NORMAL + '\n';
-
-    s += '--------------------------------\n';
-    s += BIG + BOLD_ON + fmt(sub + pct) + BOLD_OFF + NORMAL + '\n';
+    d.lines.forEach(function (l) { s += TALL + l + NORMAL + '\n'; });
+    if (d.pct) s += TALL + '+ 5% = ' + fmt(d.pct) + NORMAL + '\n';
+    s += new Array(cols() + 1).join('-') + '\n';
+    s += BIG + BOLD_ON + fmt(d.sub + d.pct) + BOLD_OFF + NORMAL + '\n';
     s += '\n\n\n';
     return s;
   }
 
-  // Plain monospace slip, centred to 32 columns, for pasting into a
-  // printer app (iPhone has no RawBT equivalent).
+  // Plain monospace version, centred by hand, for pasting or sharing
+  // into a printer app (iPhone has no RawBT equivalent).
   function textSlip() {
-    var W = 32;
+    var W = cols();
     var mid = function (t) {
-      var pad = Math.max(0, Math.floor((W - t.length) / 2));
-      return new Array(pad + 1).join(' ') + t;
+      return new Array(Math.max(0, Math.floor((W - t.length) / 2)) + 1).join(' ') + t;
     };
+    var d = slipRows();
     var out = [mid('ESTIMATE'), ''];
-
-    var sub = 0;
-    Array.prototype.forEach.call(rowsEl.children, function (row) {
-      var qty  = parseFloat(row.querySelector('.qty').value)  || 0;
-      var rate = parseFloat(row.querySelector('.rate').value) || 0;
-      if (!qty && !rate) return;
-      sub += qty * rate;
-      out.push(mid(qty + ' x ' + fmt(rate)));
-    });
-
-    var pct = pctOn.checked ? sub * 0.05 : 0;
-    if (pct) out.push(mid('+ 5% = ' + fmt(pct)));
-
+    d.lines.forEach(function (l) { out.push(mid(l)); });
+    if (d.pct) out.push(mid('+ 5% = ' + fmt(d.pct)));
     out.push(new Array(W + 1).join('-'));
-    out.push(mid(fmt(sub + pct)));
+    out.push(mid(fmt(d.sub + d.pct)));
     return out.join('\n');
   }
 
@@ -498,25 +439,9 @@
     setTimeout(function () { t.remove(); }, 2600);
   }
 
-  var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-              (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
-  var canShare = !!(navigator.share);
-  var btBtn = document.getElementById('bt');
-  if (isIOS) btBtn.textContent = canShare ? 'Send to printer' : 'Copy slip';
-
-  function copySlip(text) {
-    var done = function () { toast('Slip copied - paste into your printer app'); };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(done, function () { legacyCopy(text, done); });
-    } else {
-      legacyCopy(text, done);
-    }
-  }
-
-  // Android: Chrome will not launch a bare rawbt: URL from a web page —
-  // it has to go through the intent: scheme. Falls back to the plain
-  // scheme, then tells the user if neither took.
+  // Chrome will not launch a bare rawbt: URL from a web page, so this
+  // goes through Android's intent: scheme, with the plain scheme as a
+  // fallback.
   function sendToRawBT(b64) {
     var intentUrl = 'intent:base64,' + b64 +
                     '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
@@ -541,24 +466,6 @@
     }, 1000);
   }
 
-  btBtn.addEventListener('click', function () {
-    if (!isIOS) {
-      sendToRawBT(btoa(escposSlip()));
-      return;
-    }
-    var text = textSlip();
-    // iOS: hand the slip to the printer app through the share sheet.
-    // Falls back to the clipboard when sharing isn't available (local files).
-    if (canShare) {
-      navigator.share({ text: text }).catch(function (err) {
-        if (err && err.name === 'AbortError') return;   // user dismissed
-        copySlip(text);
-      });
-    } else {
-      copySlip(text);
-    }
-  });
-
   function legacyCopy(text, done) {
     var ta = document.getElementById('clip');
     ta.value = text;
@@ -568,15 +475,35 @@
     var ok = false;
     try { ok = document.execCommand('copy'); } catch (e) {}
     ta.setAttribute('readonly', '');
-    if (ok) done(); else toast('Could not copy - long-press the total to select');
+    if (ok) done(); else toast('Could not copy');
   }
 
-  document.getElementById('print').addEventListener('click', function () {
-    buildReceipt();
-    var paper = document.querySelector('input[name="paper"]:checked').value;
-    document.body.classList.remove('p58', 'p80');
-    document.body.classList.add('p' + paper);
-    window.print();
+  function copySlip(text) {
+    var done = function () { toast('Slip copied - paste into your printer app'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { legacyCopy(text, done); });
+    } else {
+      legacyCopy(text, done);
+    }
+  }
+
+  var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+              (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var canShare = !!navigator.share;
+  var btBtn = document.getElementById('bt');
+  if (isIOS) btBtn.textContent = canShare ? 'Send to printer' : 'Copy slip';
+
+  btBtn.addEventListener('click', function () {
+    if (!isIOS) { sendToRawBT(btoa(escposSlip())); return; }
+    var text = textSlip();
+    if (canShare) {
+      navigator.share({ text: text }).catch(function (err) {
+        if (err && err.name === 'AbortError') return;   // user dismissed
+        copySlip(text);
+      });
+    } else {
+      copySlip(text);
+    }
   });
 
   addRow(); addRow(); addRow();
