@@ -514,9 +514,36 @@
     }
   }
 
+  // Android: Chrome will not launch a bare rawbt: URL from a web page —
+  // it has to go through the intent: scheme. Falls back to the plain
+  // scheme, then tells the user if neither took.
+  function sendToRawBT(b64) {
+    var intentUrl = 'intent:base64,' + b64 +
+                    '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+    var left = false;
+    function onHide() { if (document.hidden) left = true; }
+    document.addEventListener('visibilitychange', onHide);
+
+    var a = document.createElement('a');
+    a.href = intentUrl;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    setTimeout(function () {
+      if (left) { document.removeEventListener('visibilitychange', onHide); return; }
+      try { window.location.href = 'rawbt:base64,' + b64; } catch (e) {}
+      setTimeout(function () {
+        document.removeEventListener('visibilitychange', onHide);
+        if (!left) toast('RawBT did not open - is it installed?');
+      }, 1200);
+    }, 1000);
+  }
+
   btBtn.addEventListener('click', function () {
     if (!isIOS) {
-      window.location.href = 'rawbt:base64,' + btoa(escposSlip());
+      sendToRawBT(btoa(escposSlip()));
       return;
     }
     var text = textSlip();
